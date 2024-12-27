@@ -1,0 +1,287 @@
+// server.ts
+import express from 'express';
+import cors from 'cors';
+import { Pool } from 'pg';
+import * as dotenv from 'dotenv';
+
+dotenv.config();  // ここで .env ファイルを読み込む
+
+// ==============================
+// 1) Expressアプリの作成
+// ==============================
+const app = express();
+app.use(express.json()); // JSONボディをパース
+app.use(cors());         // 必要に応じてCORSを有効化
+
+// ==============================
+// 2) PostgreSQLとの接続設定
+// ==============================
+const pool = new Pool({
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_DATABASE,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 5432,
+});
+
+// ==============================
+// 3) テーブル構成 (例)
+// ==============================
+// 事前に psql などで下記テーブルを作成済みと想定:
+//   CREATE TABLE formalin (
+//       id SERIAL PRIMARY KEY,
+//       key TEXT NOT NULL,
+//       place TEXT,
+//       status TEXT,
+//       timestamp TIMESTAMP,
+//       size TEXT,
+//       expired TIMESTAMP,
+//       lot_number TEXT
+//   );
+//   CREATE TABLE formalin_history (
+//       history_id SERIAL PRIMARY KEY,
+//       formalin_id INT NOT NULL REFERENCES formalin(id),
+//       updated_by TEXT,
+//       updated_at TIMESTAMP,
+//       old_status TEXT,
+//       new_status TEXT,
+//       old_place TEXT,
+//       new_place TEXT
+//   );
+
+// ==============================
+// 4) ルーティング (CRUDの例)
+// ==============================
+
+/**
+ * GET /api/formalin
+ * 全データを formalin_history と LEFT JOIN して取得。
+ * 履歴は JSON配列にまとめて返す
+ */
+app.get('/api/formalin', async (req, res) => {
+  try {
+    // formalin と history をJOINしてまとめる
+    const query = `
+      SELECT
+        f.id,
+        f.key,
+        f.place,
+        f.status,
+        f.timestamp,
+        f.size,
+        f.expired,
+        f.lot_number,
+        COALESCE(json_agg(
+          json_build_object(
+            'history_id', h.history_id,
+            'updatedBy', h.updated_by,
+            'updatedAt', h.updated_at,
+            'oldStatus', h.old_status,
+            'newStatus', h.new_status,
+            'oldPlace', h.old_place,
+            'newPlace', h.new_place
+          )
+        ) FILTER (WHERE h.history_id IS NOT NULL), '[]') AS history
+      FROM formalin AS f
+      LEFT JOIN formalin_history AS h
+        ON f.id = h.formalin_id
+      GROUP BY f.id
+      ORDER BY f.id;
+    `;
+
+    const result = await pool.query(query);
+    // result.rows は配列
+    // 例: [{ id: 1, key: 'xxx', ..., history: [ { updatedBy:..., ...}, ... ] }, ...]
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
+
+/**
+ * POST /api/formalin
+ * 新規 formalin レコードの作成。
+ * 必要に応じて履歴 (initialHistoryEntry) も登録したい場合、リクエストボディから受け取りINSERT
+ */
+app.post('/api/formalin', async (req, res) => {
+  try {
+    // リクエストボディから取り出す
+    const {
+      key,
+      place,
+      status,
+      timestamp,
+      size,
+      expired,
+      lotNumber,
+      // 履歴追加用(任意)
+      updatedBy,
+      oldStatus,
+      newStatus,
+      oldPlace,
+      newPlace,
+    } = req.body;
+
+    // 1) formalinテーブルにINSERT
+    const insertFormalinQuery = `
+      INSERT INTO formalin (key, place, status, timestamp, size, expired, lot_number)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id
+    `;
+    const formalinValues = [
+      key,
+      place,
+      status,
+      timestamp || null,
+      size || null,
+      expired || null,
+      lotNumber || null
+    ];
+    const formalinResult = await pool.query(insertFormalinQuery, formalinValues);
+    const newId = formalinResult.rows[0].id; // 挿入後のidを取得
+
+    // 2) 履歴 (formalin_history) にINSERT (任意)
+    //    ここでは updatedBy があれば履歴を書き込む例
+    if (updatedBy) {
+      const insertHistoryQuery = `
+        INSERT INTO formalin_history (
+          formalin_id,
+          updated_by,
+          updated_at,
+          old_status,
+          new_status,
+          old_place,
+          new_place
+        )
+        VALUES ($1, $2, NOW(), $3, $4, $5, $6)
+      `;
+      const historyValues = [
+        newId,
+        updatedBy,
+        oldStatus || '',    // 未指定なら空文字
+        newStatus || '',
+        oldPlace || '',
+        newPlace || '',
+      ];
+      await pool.query(insertHistoryQuery, historyValues);
+    }
+
+    // 生成されたidを返す
+    res.status(201).json({ id: newId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
+
+/**
+ * PUT /api/formalin/:id
+ * 指定idのレコードを更新。
+ * 履歴として formalin_history にINSERT して更新ログを残す。
+ */
+app.put('/api/formalin/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+
+    const {
+      key,
+      place,
+      status,
+      timestamp,
+      size,
+      expired,
+      lotNumber,
+      // 履歴用
+      updatedBy,
+      oldStatus,
+      newStatus,
+      oldPlace,
+      newPlace,
+    } = req.body;
+
+    // 1) formalinテーブルのUPDATE
+    const updateFormalinQuery = `
+      UPDATE formalin
+      SET
+        key = COALESCE($2, key),
+        place = COALESCE($3, place),
+        status = COALESCE($4, status),
+        timestamp = COALESCE($5, timestamp),
+        size = COALESCE($6, size),
+        expired = COALESCE($7, expired),
+        lot_number = COALESCE($8, lot_number)
+      WHERE id = $1
+    `;
+    const updateValues = [
+      id,
+      key || null,
+      place || null,
+      status || null,
+      timestamp || null,
+      size || null,
+      expired || null,
+      lotNumber || null,
+    ];
+    await pool.query(updateFormalinQuery, updateValues);
+
+    // 2) 履歴を formalin_history にINSERT (更新ログ)
+    if (updatedBy) {
+      const insertHistoryQuery = `
+        INSERT INTO formalin_history (
+          formalin_id,
+          updated_by,
+          updated_at,
+          old_status,
+          new_status,
+          old_place,
+          new_place
+        )
+        VALUES ($1, $2, NOW(), $3, $4, $5, $6)
+      `;
+      const historyValues = [
+        id,
+        updatedBy,
+        oldStatus || '',
+        newStatus || '',
+        oldPlace || '',
+        newPlace || ''
+      ];
+      await pool.query(insertHistoryQuery, historyValues);
+    }
+
+    res.sendStatus(204); // 成功を204で返す
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
+
+/**
+ * DELETE /api/formalin/:id
+ * 指定idのレコードを削除。
+ * 関連するhistoryも削除する例。
+ */
+app.delete('/api/formalin/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+
+    // 1) 履歴の削除
+    await pool.query('DELETE FROM formalin_history WHERE formalin_id = $1', [id]);
+    // 2) 本体の削除
+    await pool.query('DELETE FROM formalin WHERE id = $1', [id]);
+
+    res.sendStatus(204);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
+
+// ==============================
+// 5) サーバー起動
+// ==============================
+const PORT = 3001;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
