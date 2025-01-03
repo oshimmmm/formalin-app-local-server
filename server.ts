@@ -100,7 +100,7 @@ app.get('/api/formalin', async (req, res) => {
         f.key,
         f.place,
         f.status,
-        to_char(f.timestamp, 'YYYY-MM-DD HH24:MI:SS') as "timestamp_str",
+        f.timestamp,
         f.size,
         f.expired,
         f.lot_number,
@@ -108,7 +108,7 @@ app.get('/api/formalin', async (req, res) => {
           json_build_object(
             'history_id', h.history_id,
             'updatedBy', h.updated_by,
-            'updatedAt_str', to_char(h.updated_at, 'YYYY-MM-DD HH24:MI:SS'),
+            'updatedAt', h.updated_at,
             'oldStatus', h.old_status,
             'newStatus', h.new_status,
             'oldPlace', h.old_place,
@@ -139,7 +139,6 @@ app.get('/api/formalin', async (req, res) => {
  */
 app.post('/api/formalin', async (req, res) => {
   try {
-    console.log("Incoming timestamp:", req.body.timestamp);
     // リクエストボディから取り出す
     const {
       key,
@@ -181,12 +180,9 @@ app.post('/api/formalin', async (req, res) => {
 
     // 2) 履歴 (formalin_history) にINSERT (任意)
     //    ここでは updatedBy があれば履歴を書き込む例
-    let jstUpdatedAt = null;
-    if (updatedAt) {
-      jstUpdatedAt = utcStringToJstString(updatedAt);
-    }
 
     if (updatedBy && updatedAt) {
+      const jstUpdatedAt = updatedAt ? utcStringToJstString(updatedAt) : null;
       const insertHistoryQuery = `
         INSERT INTO formalin_history (
           formalin_id,
@@ -273,7 +269,7 @@ app.put('/api/formalin/:id', async (req, res) => {
     await pool.query(updateFormalinQuery, updateValues);
 
     // 2) 履歴を formalin_history にINSERT (更新ログ)
-    if (updatedBy) {
+    if (updatedBy && updatedAt) {
       const jstUpdatedAt = updatedAt ? utcStringToJstString(updatedAt) : null;
 
       const insertHistoryQuery = `
@@ -291,7 +287,7 @@ app.put('/api/formalin/:id', async (req, res) => {
       const historyValues = [
         id,
         updatedBy,
-        jstUpdatedAt || new Date(),
+        jstUpdatedAt,
         oldStatus || '',
         newStatus || '',
         oldPlace || '',
