@@ -3,6 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import { utcStringToJstString } from './client/src/utils/formatDate';
 
 dotenv.config();  // ここで .env ファイルを読み込む
 
@@ -99,7 +100,7 @@ app.get('/api/formalin', async (req, res) => {
         f.key,
         f.place,
         f.status,
-        f.timestamp,
+        to_char(f.timestamp, 'YYYY-MM-DD HH24:MI:SS') as "timestamp_str",
         f.size,
         f.expired,
         f.lot_number,
@@ -107,7 +108,7 @@ app.get('/api/formalin', async (req, res) => {
           json_build_object(
             'history_id', h.history_id,
             'updatedBy', h.updated_by,
-            'updatedAt', h.updated_at,
+            'updatedAt_str', to_char(h.updated_at, 'YYYY-MM-DD HH24:MI:SS'),
             'oldStatus', h.old_status,
             'newStatus', h.new_status,
             'oldPlace', h.old_place,
@@ -138,6 +139,7 @@ app.get('/api/formalin', async (req, res) => {
  */
 app.post('/api/formalin', async (req, res) => {
   try {
+    console.log("Incoming timestamp:", req.body.timestamp);
     // リクエストボディから取り出す
     const {
       key,
@@ -149,11 +151,15 @@ app.post('/api/formalin', async (req, res) => {
       lotNumber,
       // 履歴追加用(任意)
       updatedBy,
+      updatedAt,
       oldStatus,
       newStatus,
       oldPlace,
       newPlace,
     } = req.body;
+
+    // 1) formalin.timestamp は JST形式の文字列に変換しておく
+    const jstTimestamp = utcStringToJstString(timestamp);
 
     // 1) formalinテーブルにINSERT
     const insertFormalinQuery = `
@@ -165,7 +171,7 @@ app.post('/api/formalin', async (req, res) => {
       key,
       place,
       status,
-      timestamp || null,
+      jstTimestamp || null,
       size || null,
       expired || null,
       lotNumber || null
@@ -175,7 +181,12 @@ app.post('/api/formalin', async (req, res) => {
 
     // 2) 履歴 (formalin_history) にINSERT (任意)
     //    ここでは updatedBy があれば履歴を書き込む例
-    if (updatedBy) {
+    let jstUpdatedAt = null;
+    if (updatedAt) {
+      jstUpdatedAt = utcStringToJstString(updatedAt);
+    }
+
+    if (updatedBy && updatedAt) {
       const insertHistoryQuery = `
         INSERT INTO formalin_history (
           formalin_id,
@@ -186,11 +197,12 @@ app.post('/api/formalin', async (req, res) => {
           old_place,
           new_place
         )
-        VALUES ($1, $2, NOW(), $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `;
       const historyValues = [
         newId,
         updatedBy,
+        jstUpdatedAt,
         oldStatus || '',    // 未指定なら空文字
         newStatus || '',
         oldPlace || '',
@@ -226,11 +238,14 @@ app.put('/api/formalin/:id', async (req, res) => {
       lotNumber,
       // 履歴用
       updatedBy,
+      updatedAt,
       oldStatus,
       newStatus,
       oldPlace,
       newPlace,
     } = req.body;
+
+    const jstTimestamp = utcStringToJstString(timestamp);
 
     // 1) formalinテーブルのUPDATE
     const updateFormalinQuery = `
@@ -250,7 +265,7 @@ app.put('/api/formalin/:id', async (req, res) => {
       key || null,
       place || null,
       status || null,
-      timestamp || null,
+      jstTimestamp || null,
       size || null,
       expired || null,
       lotNumber || null,
@@ -259,6 +274,8 @@ app.put('/api/formalin/:id', async (req, res) => {
 
     // 2) 履歴を formalin_history にINSERT (更新ログ)
     if (updatedBy) {
+      const jstUpdatedAt = updatedAt ? utcStringToJstString(updatedAt) : null;
+
       const insertHistoryQuery = `
         INSERT INTO formalin_history (
           formalin_id,
@@ -269,11 +286,12 @@ app.put('/api/formalin/:id', async (req, res) => {
           old_place,
           new_place
         )
-        VALUES ($1, $2, NOW(), $3, $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `;
       const historyValues = [
         id,
         updatedBy,
+        jstUpdatedAt || new Date(),
         oldStatus || '',
         newStatus || '',
         oldPlace || '',

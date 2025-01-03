@@ -1,0 +1,63 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:17   # PostgreSQL 17系
+    container_name: formalin-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: formalin_db
+      TZ: Asia/Tokyo
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    volumes:
+      # データはホストマシンのdb_dataボリュームに追加される
+      - db_data:/var/lib/postgresql/data
+      # データベースの初期化スクリプト
+      - ./db-init:/docker-entrypoint-initdb.d
+    networks:
+      - app-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: formalin-backend
+    ports:
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Dockerネットワーク内で 'db' というホスト名でPostgreSQLにアクセス
+      # server.ts 内で process.env.DB_HOST, DB_USER, DB_PASSWORD, DB_DATABASE を使う
+      DB_HOST: db
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE: formalin_db
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.client
+    container_name: formalin-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+volumes:
+  db_data:
+
+networks:
+  app-network:
+    driver: bridge

@@ -1,0 +1,30 @@
+# Node.jsイメージ (バージョンは適宜)
+FROM node:20-alpine
+
+# タイムゾーン設定に必要な tzdata インストール
+RUN apk add --no-cache tzdata \
+ && cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
+ && echo "Asia/Tokyo" > /etc/timezone
+
+# 作業ディレクトリ
+WORKDIR /app
+
+# package.json と package-lock.json をコピー
+COPY package*.json ./
+
+# 依存関係インストール
+RUN npm install
+
+# タイムゾーン設定
+RUN apk add --no-cache tzdata \
+    && ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
+    && echo "Asia/Tokyo" > /etc/timezone
+
+# ソースコードをコピー
+COPY . .
+
+# ポート公開 (Expressが3001で起動する想定)
+EXPOSE 3001
+
+# 起動コマンド
+CMD ["npm", "run", "server"]
