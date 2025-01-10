@@ -51,8 +51,81 @@ const pool = new Pool({
 //   );
 
 // ==============================
-// 4) ルーティング (CRUDの例)
+// 全ユーザーのユーザー名を取得
 // ==============================
+
+app.get('/api/users', async (req: Request, res: Response) => {
+  try {
+    const query = `SELECT username FROM users ORDER BY username`;
+    const result = await pool.query(query);
+    const usernames = result.rows.map(row => row.username);
+    res.json({ users: usernames });
+  } catch (err) {
+    console.error('ユーザー一覧取得エラー:', err);
+    res.status(500).json({ success: false, message: 'サーバーエラー' });
+  }
+});
+
+/**
+ * POST /api/verify-password
+ * ユーザーのパスワードを検証
+ * リクエストボディ: { username, password }
+ */
+app.post('/api/verify-password', async (req: Request, res: Response) => {
+  try {
+    const { username, password } = req.body;
+
+    const query = `SELECT password FROM users WHERE username = $1 LIMIT 1`;
+    const result = await pool.query(query, [username]);
+
+    if (result.rows.length === 0) {
+      return res.json({ success: false, message: 'ユーザーが存在しません。' });
+    }
+
+    const user = result.rows[0];
+    if (user.password !== password) {
+      return res.json({ success: false, message: 'パスワードが間違っています。' });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('パスワード検証エラー:', err);
+    res.status(500).json({ success: false, message: 'サーバーエラー' });
+  }
+});
+
+/**
+ * POST /api/update-user
+ * ユーザーのパスワードとユーザー種別を更新
+ * リクエストボディ: { username, newPassword, newIsAdmin }
+ */
+app.post('/api/update-user', async (req: Request, res: Response) => {
+  try {
+    const { username, newPassword, newIsAdmin } = req.body;
+
+    // ユーザーが存在するか確認
+    const checkQuery = `SELECT id FROM users WHERE username = $1 LIMIT 1`;
+    const checkResult = await pool.query(checkQuery, [username]);
+
+    if (checkResult.rows.length === 0) {
+      return res.json({ success: false, message: 'ユーザーが存在しません。' });
+    }
+
+    // パスワードを更新
+    const updateQuery = `
+      UPDATE users
+      SET password = COALESCE($2, password),
+          is_admin = COALESCE($3, is_admin)
+      WHERE username = $1
+    `;
+    await pool.query(updateQuery, [username, newPassword, newIsAdmin]);
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('ユーザー更新エラー:', err);
+    res.status(500).json({ success: false, message: 'サーバーエラー' });
+  }
+});
 
 /**
  * GET /api/formalin

@@ -30,6 +30,15 @@ services:
     container_name: formalin-backend
     ports:
       - "3001:3001"
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+        - action: rebuild
+          path: package.json
+        - action: rebuild
+          path: Dockerfile.server
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +59,15 @@ services:
     container_name: formalin-frontend
     ports:
       - "3000:80"
+    develop:
+      watch:
+        - action: sync
+          path: ./client
+          target: /app/client
+        - action: rebuild
+          path: ./client/package.json
+        - action: rebuild
+          path: Dockerfile.client
     depends_on:
       - backend
     networks:
