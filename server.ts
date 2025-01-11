@@ -128,6 +128,39 @@ app.post('/api/update-user', async (req: Request, res: Response) => {
 });
 
 /**
+ * DELETE /api/delete-user
+ * ユーザーを削除
+ * リクエストボディ: { username }
+ */
+app.delete('/api/delete-user', async (req: Request, res: Response) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({ success: false, message: 'ユーザー名が提供されていません。' });
+    }
+
+    // ユーザーが存在するか確認
+    const checkQuery = `SELECT id FROM users WHERE username = $1 LIMIT 1`;
+    const checkResult = await pool.query(checkQuery, [username]);
+
+    if (checkResult.rows.length === 0) {
+      return res.json({ success: false, message: 'ユーザーが存在しません。' });
+    }
+
+    // ユーザーを削除
+    const deleteQuery = `DELETE FROM users WHERE username = $1`;
+    await pool.query(deleteQuery, [username]);
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('ユーザー削除エラー:', err);
+    res.status(500).json({ success: false, message: 'サーバーエラー' });
+  }
+});
+
+
+/**
  * GET /api/formalin
  * 全データを formalin_history と LEFT JOIN して取得。
  * 履歴は JSON配列にまとめて返す
